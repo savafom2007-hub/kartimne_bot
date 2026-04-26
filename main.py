@@ -3,7 +3,6 @@ import time
 import requests
 from googleapiclient.discovery import build
 import vk_api
-from TikTokApi import TikTokApi
 
 # ================= ENV =================
 
@@ -16,53 +15,16 @@ VK_TOKEN = os.getenv("VK_TOKEN")
 
 KEYWORDS = [
     "как оформить карту",
-    "как получить карту",
-    "где взять карту",
     "дебетовая карта",
-    "кредитная карта",
-    "какую карту выбрать",
-    "банк отзывы",
-    "карта условия",
-    "как открыть счет",
-    "нужна карта",
-    "посоветуйте банк",
-    "какой банк лучше"
+    "какую карту выбрать"
 ]
-
-CHECK_INTERVAL = 60
 
 youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
 vk = vk_api.VkApi(token=VK_TOKEN)
 vk_api_client = vk.get_api()
 
 checked_comments = set()
-
-# ================= SCORE =================
-
-def get_lead_score(text):
-    text = text.lower()
-    score = 0
-
-    strong = ["хочу", "нужна карта", "оформить карту", "скинь", "где оформить"]
-    medium = ["как", "где", "какой банк", "посоветуйте", "что лучше"]
-
-    for w in strong:
-        if w in text:
-            score += 3
-
-    for w in medium:
-        if w in text:
-            score += 1
-
-    return score
-
-def get_level(score):
-    if score >= 4:
-        return "🔥 ГОРЯЧИЙ"
-    elif score >= 2:
-        return "🟡 ТЁПЛЫЙ"
-    else:
-        return "⚪ СЛАБЫЙ"
+video_cache = []
 
 # ================= TELEGRAM =================
 
@@ -73,49 +35,70 @@ def send_telegram(text):
     except:
         pass
 
+# ================= SCORE =================
+
+def get_lead_score(text):
+    text = text.lower()
+
+    if any(x in text for x in ["хочу", "оформить", "скинь", "где оформить"]):
+        return 3
+    if any(x in text for x in ["как", "где", "посоветуйте"]):
+        return 1
+    return 0
+
 # ================= YOUTUBE =================
 
-def search_youtube():
-    results = []
+def update_videos():
+    global video_cache
 
-    for keyword in KEYWORDS:
-        videos = youtube.search().list(
-            q=keyword,
+    print("🔎 обновляем видео...")
+
+    try:
+        res = youtube.search().list(
+            q=" OR ".join(KEYWORDS),
             part="id",
             type="video",
-            order="relevance",
-            maxResults=25
-        ).execute().get("items", [])
+            order="date",
+            maxResults=3
+        ).execute()
 
-        for video in videos:
-            video_id = video["id"]["videoId"]
+        video_cache = [v["id"]["videoId"] for v in res["items"]]
 
-            comments = youtube.commentThreads().list(
+    except Exception as e:
+        print("YT search error:", e)
+
+def check_youtube_comments():
+    for vid in video_cache:
+        try:
+            res = youtube.commentThreads().list(
                 part="snippet",
-                videoId=video_id,
-                maxResults=100
-            ).execute().get("items", [])
+                videoId=vid,
+                maxResults=5
+            ).execute()
 
-            for c in comments:
-                text = c["snippet"]["topLevelComment"]["snippet"]["textDisplay"]
-                cid = c["snippet"]["topLevelComment"]["id"]
+            for item in res["items"]:
+                c = item["snippet"]["topLevelComment"]
+                text = c["snippet"]["textDisplay"]
+                cid = c["id"]
 
-                results.append({
-                    "id": cid,
-                    "text": text,
-                    "link": f"https://youtube.com/watch?v={video_id}",
-                    "platform": "YouTube"
-                })
+                if cid in checked_comments:
+                    continue
 
-    return results
+                checked_comments.add(cid)
+
+                score = get_lead_score(text)
+
+                if score >= 1:
+                    send_telegram(f"🔥 YouTube\n\n{text}\n\nhttps://youtube.com/watch?v={vid}")
+
+        except Exception as e:
+            print("YT comment error:", e)
 
 # ================= VK =================
 
-def search_vk():
-    results = []
-
-    for keyword in KEYWORDS:
-        posts = vk_api_client.newsfeed.search(q=keyword, count=20)
+def check_vk():
+    try:
+        posts = vk_api_client.newsfeed.search(q="карта банк", count=5)
 
         for post in posts["items"]:
             owner_id = post["owner_id"]
@@ -124,77 +107,49 @@ def search_vk():
             comments = vk_api_client.wall.getComments(
                 owner_id=owner_id,
                 post_id=post_id,
-                count=50
+                count=10
             )["items"]
 
             for c in comments:
                 text = c.get("text", "")
                 cid = f"vk_{c['id']}"
 
-                results.append({
-                    "id": cid,
-                    "text": text,
-                    "link": f"https://vk.com/wall{owner_id}_{post_id}",
-                    "platform": "VK"
-                })
+                if cid in checked_comments:
+                    continue
 
-    return results
+                checked_comments.add(cid)
 
-# ================= TIKTOK =================
+                score = get_lead_score(text)
 
-def search_tiktok():
-    results = []
+                if score >= 1:
+                    send_telegram(f"🔥 VK\n\n{text}\n\nhttps://vk.com/wall{owner_id}_{post_id}")
 
-    try:
-        with TikTokApi() as api:
-            for keyword in KEYWORDS:
-                videos = api.search.videos(keyword, count=5)
-
-                for video in videos:
-                    for c in video.comments(count=30):
-                        results.append({
-                            "id": f"tt_{c.id}",
-                            "text": c.text,
-                            "link": f"https://www.tiktok.com/video/{video.id}",
-                            "platform": "TikTok"
-                        })
-    except:
-        pass
-
-    return results
-
-# ================= PROCESS =================
-
-def process_comments(comments):
-    for comment in comments:
-        if comment["id"] in checked_comments:
-            continue
-
-        checked_comments.add(comment["id"])
-
-        score = get_lead_score(comment["text"])
-        level = get_level(score)
-
-        if score >= 1:
-            send_telegram(
-                f"{level} {comment['platform']}\n\n{comment['text']}\n\n{comment['link']}"
-            )
+    except Exception as e:
+        print("VK error:", e)
 
 # ================= MAIN =================
 
 def main():
-    print("🚀 ULTRA BOT STARTED")
+    print("🚀 BOT STARTED")
+
+    last_update = 0
 
     while True:
         try:
-            process_comments(search_youtube())
-            process_comments(search_vk())
-            process_comments(search_tiktok())
+            now = time.time()
 
-            time.sleep(CHECK_INTERVAL)
+            # обновляем видео раз в 30 минут
+            if now - last_update > 1800:
+                update_videos()
+                last_update = now
+
+            check_youtube_comments()
+            check_vk()
+
+            time.sleep(120)
 
         except Exception as e:
-            print("Error:", e)
+            print("ERROR:", e)
             time.sleep(10)
 
 if __name__ == "__main__":
