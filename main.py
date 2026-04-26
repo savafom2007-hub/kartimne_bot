@@ -161,8 +161,7 @@ def process_comments(comments):
         checked_comments.add(comment["id"])
 
         score = get_lead_score(comment["text"]
-
-if score >= 3:
+        if score >= 3:
             send_telegram(
                 f"🔥 {comment['platform']} ЛИД\n\n{comment['text']}\n\n{comment['link']}"
             )
