@@ -12,23 +12,26 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 VK_TOKEN = os.getenv("VK_TOKEN")
 
-if not all([YOUTUBE_API_KEY, TELEGRAM_TOKEN, CHAT_ID, VK_TOKEN]):
-    print("❌ Missing ENV variables")
-    exit()
-
 # ================= SETTINGS =================
 
 KEYWORDS = [
     "как оформить карту",
+    "как получить карту",
+    "где взять карту",
     "дебетовая карта",
-    "лучшая карта",
-    "банк отзывы"
+    "кредитная карта",
+    "какую карту выбрать",
+    "банк отзывы",
+    "карта условия",
+    "как открыть счет",
+    "нужна карта",
+    "посоветуйте банк",
+    "какой банк лучше"
 ]
 
-CHECK_INTERVAL = 30
+CHECK_INTERVAL = 60
 
 youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-
 vk = vk_api.VkApi(token=VK_TOKEN)
 vk_api_client = vk.get_api()
 
@@ -40,8 +43,8 @@ def get_lead_score(text):
     text = text.lower()
     score = 0
 
-    strong = ["хочу карту", "оформить карту", "нужна карта", "скинь ссылку"]
-    medium = ["как оформить", "где взять", "как получить"]
+    strong = ["хочу", "нужна карта", "оформить карту", "скинь", "где оформить"]
+    medium = ["как", "где", "какой банк", "посоветуйте", "что лучше"]
 
     for w in strong:
         if w in text:
@@ -53,6 +56,14 @@ def get_lead_score(text):
 
     return score
 
+def get_level(score):
+    if score >= 4:
+        return "🔥 ГОРЯЧИЙ"
+    elif score >= 2:
+        return "🟡 ТЁПЛЫЙ"
+    else:
+        return "⚪ СЛАБЫЙ"
+
 # ================= TELEGRAM =================
 
 def send_telegram(text):
@@ -62,13 +73,49 @@ def send_telegram(text):
     except:
         pass
 
+# ================= YOUTUBE =================
+
+def search_youtube():
+    results = []
+
+    for keyword in KEYWORDS:
+        videos = youtube.search().list(
+            q=keyword,
+            part="id",
+            type="video",
+            order="relevance",
+            maxResults=25
+        ).execute().get("items", [])
+
+        for video in videos:
+            video_id = video["id"]["videoId"]
+
+            comments = youtube.commentThreads().list(
+                part="snippet",
+                videoId=video_id,
+                maxResults=100
+            ).execute().get("items", [])
+
+            for c in comments:
+                text = c["snippet"]["topLevelComment"]["snippet"]["textDisplay"]
+                cid = c["snippet"]["topLevelComment"]["id"]
+
+                results.append({
+                    "id": cid,
+                    "text": text,
+                    "link": f"https://youtube.com/watch?v={video_id}",
+                    "platform": "YouTube"
+                })
+
+    return results
+
 # ================= VK =================
 
 def search_vk():
     results = []
 
     for keyword in KEYWORDS:
-        posts = vk_api_client.newsfeed.search(q=keyword, count=5)
+        posts = vk_api_client.newsfeed.search(q=keyword, count=20)
 
         for post in posts["items"]:
             owner_id = post["owner_id"]
@@ -77,7 +124,7 @@ def search_vk():
             comments = vk_api_client.wall.getComments(
                 owner_id=owner_id,
                 post_id=post_id,
-                count=20
+                count=50
             )["items"]
 
             for c in comments:
@@ -93,41 +140,6 @@ def search_vk():
 
     return results
 
-# ================= YOUTUBE =================
-
-def search_youtube():
-    results = []
-
-    videos = youtube.search().list(
-        q=" OR ".join(KEYWORDS),
-        part="id,snippet",
-        type="video",
-        order="date",
-        maxResults=5
-    ).execute().get("items", [])
-
-    for video in videos:
-        video_id = video["id"]["videoId"]
-
-        comments = youtube.commentThreads().list(
-            part="snippet",
-            videoId=video_id,
-            maxResults=20
-        ).execute().get("items", [])
-
-        for c in comments:
-            text = c["snippet"]["topLevelComment"]["snippet"]["textDisplay"]
-            cid = c["snippet"]["topLevelComment"]["id"]
-
-            results.append({
-                "id": cid,
-                "text": text,
-                "link": f"https://youtube.com/watch?v={video_id}",
-                "platform": "YouTube"
-            })
-
-    return results
-
 # ================= TIKTOK =================
 
 def search_tiktok():
@@ -136,18 +148,18 @@ def search_tiktok():
     try:
         with TikTokApi() as api:
             for keyword in KEYWORDS:
-                videos = api.search.videos(keyword, count=3)
+                videos = api.search.videos(keyword, count=5)
 
                 for video in videos:
-                    for c in video.comments(count=20):
+                    for c in video.comments(count=30):
                         results.append({
                             "id": f"tt_{c.id}",
                             "text": c.text,
                             "link": f"https://www.tiktok.com/video/{video.id}",
                             "platform": "TikTok"
                         })
-    except Exception as e:
-        print("TikTok error:", e)
+    except:
+        pass
 
     return results
 
@@ -161,20 +173,22 @@ def process_comments(comments):
         checked_comments.add(comment["id"])
 
         score = get_lead_score(comment["text"])
+        level = get_level(score)
+
         if score >= 1:
             send_telegram(
-                f"🔥 {comment['platform']} ЛИД\n\n{comment['text']}\n\n{comment['link']}"
+                f"{level} {comment['platform']}\n\n{comment['text']}\n\n{comment['link']}"
             )
 
 # ================= MAIN =================
 
 def main():
-    print("🚀 Bot started (no auto replies)")
+    print("🚀 ULTRA BOT STARTED")
 
     while True:
         try:
-            process_comments(search_vk())
             process_comments(search_youtube())
+            process_comments(search_vk())
             process_comments(search_tiktok())
 
             time.sleep(CHECK_INTERVAL)
