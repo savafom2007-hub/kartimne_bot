@@ -1,2 +1,4 @@
 google-api-python-client
 requests
+vk_api
+TikTokApi
