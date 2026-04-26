@@ -25,7 +25,7 @@ KEYWORDS = [
     "банк отзывы"
 ]
 
-CHECK_INTERVAL = 180
+CHECK_INTERVAL = 30
 
 youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
 
@@ -161,7 +161,7 @@ def process_comments(comments):
         checked_comments.add(comment["id"])
 
         score = get_lead_score(comment["text"])
-        if score >= 3:
+        if score >= 1:
             send_telegram(
                 f"🔥 {comment['platform']} ЛИД\n\n{comment['text']}\n\n{comment['link']}"
             )
